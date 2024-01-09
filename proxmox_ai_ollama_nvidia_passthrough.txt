@@ -1,0 +1,78 @@
+### LLM IA - RockyLinux 9.x and NVIDIA Quadro P400 Board (2GB vRAM - CUDA compute capability 6.1) ###
+## Proxmox 7.4
+## VM requirement: 8GB RAM and n.4 vCPU
+# Ref.https://www.linuxcapable.com/how-to-install-nvidia-drivers-on-rocky-linux/
+
+# Disable SELinux on RockyLinux 9.x
+
+> dnf install -y grubby
+> grubby --update-kernel ALL --args selinux=0
+> reboot
+
+# Add Epel Repo
+> dnf install epel-release
+
+# Add Nvidia Driver Repo
+> dnf config-manager --add-repo http://developer.download.nvidia.com/compute/cuda/repos/rhel9/$(uname -i)/cuda-rhel9.repo
+
+# Install dependency for Kernel Build NVidia Driver
+> dnf install kernel-headers-$(uname -r) kernel-devel-$(uname -r) tar bzip2 make automake gcc gcc-c++ pciutils elfutils-libelf-devel libglvnd-opengl libglvnd-glx libglvnd-devel acpid pkgconfig dkms
+
+# Install the NVidia Driver
+> dnf module install nvidia-driver:latest-dkms
+
+# Disable NVidia OpenSource Driver (nouveau) 
+> echo "blacklist nouveau" | tee /etc/modprobe.d/blacklist-nouveau.conf
+
+# Regenerate Kernel images
+> dracut --regenerate-all --force
+> depmod -a
+> reboot
+
+
+# Check NVIDIA Driver is working
+> nvidia-smi
+
+## Install the NVIDIA Container Toolkit
+Ref.https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+
+> curl -s -L https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo | tee /etc/yum.repos.d/nvidia-container-toolkit.repo
+
+> dnf config-manager --enable nvidia-container-toolkit-experimental
+> dnf install -y nvidia-container-toolkit
+
+## Install Docker 
+> dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+> dnf install docker-ce docker-ce-cli containerd.io
+
+# Fix Docker default shm size and other runtime configuration env parameters
+----
+echo '{
+    "default-shm-size": "8G",
+    "default-ulimits": {
+         "memlock": { "name":"memlock", "soft":  -1, "hard": -1 },
+         "stack"  : { "name":"stack", "soft": 67108864, "hard": 67108864 }
+    }
+}' | tee -a /etc/docker/daemon.json > /dev/null
+----
+
+# Configure Docker to use the NVIDIA Container Toolkit
+> nvidia-ctk runtime configure --runtime=docker
+
+# Start Docker daemon
+> systemctl enable docker --now
+
+# Create a dedicated Mount Point for the LLM models
+> mkdir -p /opt/data
+
+# Run Ollama as LLM engine inside the docker container (NB: 0.1.12 contain a BUG and goes OOB on NVIDIA GPU)
+# Ref.https://ollama.ai/blog/ollama-is-now-available-as-an-official-docker-image
+#     https://cheshirecat.ai/local-models-with-ollama/
+> docker run -d --gpus=all -v /opt/data:/root/.ollama -p 11434:11434 --name ollama ollama/ollama:0.1.11
+
+# Run Ollama specific model like MISTRAL or LLAMA2 (4GB space) Other models working require more vRAM (My board have only 2GB)
+> docker exec -it ollama ollama run mistral-openorca
+
+## Check GPU performance (https://github.com/Syllo/nvtop)
+> dnf install nvtop
+
